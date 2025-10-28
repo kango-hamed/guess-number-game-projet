@@ -1,6 +1,8 @@
 // ========== CONFIGURATION ==========
 const CONFIG = {
-    SERVER_URL: 'http://localhost:8000',
+    // URL du serveur WebSocket (utiliser ws:// pour HTTP ou wss:// pour HTTPS)
+    SERVER_URL: 'ws://localhost:8000',
+    // Nombre de tentatives de reconnexion
     RECONNECT_ATTEMPTS: 5,
     RECONNECT_DELAY: 2000
 };
@@ -12,7 +14,8 @@ const GameState = {
     socketId: null,
     currentRoom: null,
     players: [],
-    history: [],
+    // ✅ CORRECTION (doublons): Historique de MES propositions
+    history: [], 
     myStats: { attempts: 0, found: false },
     connected: false
 };
@@ -56,7 +59,7 @@ const DOM = {
 // ========== SONS 8-BIT (Synthèse Audio) ==========
 const SoundFX = {
     audioContext: null,
-    
+
     init() {
         this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
     },
@@ -80,25 +83,17 @@ const SoundFX = {
         oscillator.stop(this.audioContext.currentTime + duration);
     },
     
-    click() {
-        this.playTone(800, 0.05);
-    },
-    
+    click() { this.playTone(800, 0.05); },
     success() {
         this.playTone(523, 0.1);
         setTimeout(() => this.playTone(659, 0.1), 100);
         setTimeout(() => this.playTone(784, 0.2), 200);
     },
-    
     error() {
         this.playTone(200, 0.1);
         setTimeout(() => this.playTone(150, 0.2), 100);
     },
-    
-    hint() {
-        this.playTone(440, 0.1);
-    },
-    
+    hint() { this.playTone(440, 0.1); },
     playerJoin() {
         this.playTone(600, 0.08);
         setTimeout(() => this.playTone(700, 0.08), 80);
@@ -107,21 +102,28 @@ const SoundFX = {
 
 // ========== GESTION DES ÉCRANS ==========
 const ScreenManager = {
+    currentScreen: 'menu',
+
     show(screenName) {
-        DOM.menuScreen.classList.remove('active');
-        DOM.lobbyScreen.classList.remove('active');
-        DOM.gameScreen.classList.remove('active');
+        // Utilise la transition CSS (opacity)
+        const oldScreen = DOM[this.currentScreen + 'Screen'];
+        const newScreen = DOM[screenName + 'Screen'];
+
+        if (oldScreen) {
+            oldScreen.classList.remove('active');
+        }
+        
+        newScreen.classList.add('active');
+        this.currentScreen = screenName;
         
         switch(screenName) {
             case 'menu':
-                DOM.menuScreen.classList.add('active');
                 break;
             case 'lobby':
-                DOM.lobbyScreen.classList.add('active');
-                this.loadRooms();
+                // ✅ CORRECTION: Appeler la bonne méthode pour charger les salons
+                SocketManager.getRooms();
                 break;
             case 'game':
-                DOM.gameScreen.classList.add('active');
                 break;
         }
         
@@ -131,23 +133,79 @@ const ScreenManager = {
 
 // ========== WEBSOCKET ==========
 const SocketManager = {
+    // Vérifie si l'utilisateur actuel est l'hôte de la salle
+    isRoomHost: function() {
+        // L'hôte est le premier joueur de la liste
+        if (!GameState.currentRoom || !GameState.currentRoom.players || GameState.currentRoom.players.length === 0) {
+            return false;
+        }
+        return GameState.currentRoom.players[0].socket_id === GameState.socketId;
+    },
     connect() {
         console.log('🔌 Connexion au serveur...');
-        
+
+        // Configuration améliorée de la connexion Socket.IO
         GameState.socket = io(CONFIG.SERVER_URL, {
+            // Forcer l'utilisation de WebSocket en premier, puis polling en fallback
             transports: ['websocket', 'polling'],
+            
+            // Options de reconnexion
             reconnection: true,
             reconnectionAttempts: CONFIG.RECONNECT_ATTEMPTS,
-            reconnectionDelay: CONFIG.RECONNECT_DELAY
+            reconnectionDelay: CONFIG.RECONNECT_DELAY,
+            reconnectionDelayMax: 10000, // 10 secondes max entre les tentatives
+            
+            // Timeout de connexion
+            timeout: 10000, // 10 secondes avant timeout
+            
+            // Désactiver le transport par défaut (évite les problèmes de protocole)
+            forceNew: true,
+            
+            // Activer le mode debug
+            debug: true,
+            
+            // Désactiver le cache pour éviter les problèmes de connexion
+            rememberUpgrade: true,
+            
+            // Désactiver le multiplexing pour éviter les problèmes de connexion
+            multiplex: false,
+            
+            // Forcer le transport WebSocket
+            upgrade: true,
+            
+            // Délai avant de considérer la connexion comme perdue
+            pingTimeout: 60000, // 60 secondes
+            
+            // Intervalle entre les pings
+            pingInterval: 25000, // 25 secondes
+            
+            // Délai avant réessai de connexion
+            reconnectionDelay: 1000,
+            
+            // Nombre maximum de tentatives de reconnexion
+            reconnectionAttempts: 5
         });
         
+        // Configurer les écouteurs d'événements
         this.setupListeners();
+        
+        // Forcer une reconnexion immédiate en cas de déconnexion
+        GameState.socket.io.on('reconnect_attempt', (attempt) => {
+            console.log(`🔄 Tentative de reconnexion #${attempt}`);
+        });
+        
+        GameState.socket.io.on('reconnect_error', (error) => {
+            console.error('❌ Erreur de reconnexion:', error);
+        });
+        
+        GameState.socket.io.on('reconnect_failed', () => {
+            console.error('❌ Échec de la reconnexion après plusieurs tentatives');
+        });
     },
     
     setupListeners() {
         const socket = GameState.socket;
         
-        // Connexion établie
         socket.on('connect', () => {
             console.log('✅ Connecté au serveur');
             GameState.connected = true;
@@ -156,25 +214,21 @@ const SocketManager = {
             this.fetchServerStats();
         });
         
-        // Déconnexion
         socket.on('disconnect', () => {
             console.log('❌ Déconnecté du serveur');
             GameState.connected = false;
             this.updateConnectionStatus(false);
         });
         
-        // Erreur de connexion
         socket.on('connect_error', (error) => {
             console.error('Erreur de connexion:', error);
             this.updateConnectionStatus(false);
         });
         
-        // Message de bienvenue
         socket.on('connected', (data) => {
             console.log('📡 Message serveur:', data.message);
         });
         
-        // Joueur enregistré
         socket.on('player_registered', (data) => {
             if (data.success) {
                 console.log('✅ Joueur enregistré:', data.player.username);
@@ -182,7 +236,6 @@ const SocketManager = {
             }
         });
         
-        // Salle créée
         socket.on('room_created', (data) => {
             if (data.success) {
                 GameState.currentRoom = data.room;
@@ -192,7 +245,6 @@ const SocketManager = {
             }
         });
         
-        // Salle rejointe
         socket.on('room_joined', (data) => {
             if (data.success) {
                 GameState.currentRoom = data.room;
@@ -202,7 +254,6 @@ const SocketManager = {
             }
         });
         
-        // Nouveau joueur dans la salle
         socket.on('player_joined', (data) => {
             console.log('👤 Nouveau joueur:', data.username);
             GameState.currentRoom = data.room_state;
@@ -211,7 +262,6 @@ const SocketManager = {
             SoundFX.playerJoin();
         });
         
-        // Joueur quitté
         socket.on('player_left', (data) => {
             console.log('👋 Joueur parti:', data.username);
             GameState.currentRoom = data.room_state;
@@ -219,16 +269,56 @@ const SocketManager = {
             UIManager.showNotification(`${data.username} a quitté la partie`, 'warning');
         });
         
-        // Partie démarrée
         socket.on('game_started', (data) => {
-            console.log('🎮 Partie démarrée !');
-            GameState.currentRoom = data.room_state;
-            GameManager.startGame();
-            UIManager.showNotification(data.message, 'success');
-            SoundFX.success();
+            try {
+                // Validation des données reçues
+                if (!data || !data.room_state) {
+                    throw new Error('Données de partie invalides reçues du serveur');
+                }
+                
+                console.log('🎮 Partie démarrée !', data);
+                
+                // Mise à jour de l'état de la salle
+                GameState.currentRoom = data.room_state;
+                
+                // Vérification que la partie est bien en cours
+                if (data.room_state.status !== 'playing') {
+                    throw new Error(`Statut de partie invalide: ${data.room_state.status}`);
+                }
+                
+                // Démarrage du jeu côté client
+                GameManager.startGame();
+                
+                // Affichage du message de confirmation
+                if (data.message) {
+                    UIManager.showNotification(data.message, 'success');
+                }
+                
+                // Jouer un son de démarrage
+                SoundFX.success();
+                
+            } catch (error) {
+                console.error('Erreur lors du démarrage de la partie:', error);
+                
+                // Afficher un message d'erreur à l'utilisateur
+                UIManager.showNotification(
+                    'Erreur lors du démarrage de la partie. Retour au lobby...', 
+                    'error'
+                );
+                
+                // Jouer un son d'erreur
+                SoundFX.error();
+                
+                // Revenir au lobby en cas d'erreur
+                ScreenManager.show('lobby');
+                
+                // Essayer de rafraîchir l'état du lobby
+                setTimeout(() => {
+                    SocketManager.getRooms();
+                }, 1000);
+            }
         });
         
-        // Résultat de tentative
         socket.on('guess_result', (data) => {
             if (data.success) {
                 GameManager.handleGuessResult(data);
@@ -238,31 +328,56 @@ const SocketManager = {
             }
         });
         
-        // Mise à jour de la salle
         socket.on('room_update', (data) => {
             GameState.currentRoom = data.room_state;
             GameManager.updatePlayers();
             
-            if (data.last_action) {
+            // ✅ CORRECTION (sync history): Gérer l'action du dernier joueur
+            if (data.last_action && data.last_action.socket_id !== GameState.socketId) {
                 const action = data.last_action;
                 console.log(`📢 ${action.player} a proposé ${action.guess} -> ${action.result}`);
+                GameManager.handleOtherPlayerAction(action);
             }
         });
         
-        // Partie terminée
+        socket.on('game_error', (errorData) => {
+            console.error('Erreur de partie:', errorData);
+            
+            // Afficher un message d'erreur convivial
+            const errorMessage = errorData?.message || 'Une erreur est survenue avec la partie';
+            UIManager.showNotification(`Erreur: ${errorMessage}`, 'error');
+            
+            // Jouer un son d'erreur
+            SoundFX.error();
+            
+            // Si on a des informations sur la salle, on met à jour l'état
+            if (errorData?.room_state) {
+                GameState.currentRoom = errorData.room_state;
+                GameManager.updatePlayers();
+            }
+            
+            // Si l'erreur est critique, on retourne au lobby
+            if (errorData?.critical) {
+                ScreenManager.show('lobby');
+                
+                // Rafraîchir la liste des salles
+                setTimeout(() => {
+                    SocketManager.getRooms();
+                }, 1000);
+            }
+        });
+        
         socket.on('game_finished', (data) => {
             console.log('🏆 Partie terminée !');
             GameManager.endGame(data);
             SoundFX.success();
         });
         
-        // Liste des salles
         socket.on('rooms_list', (data) => {
             console.log(`📋 ${data.total} salles disponibles`);
             LobbyManager.displayRooms(data.rooms);
         });
         
-        // Salle quittée
         socket.on('room_left', (data) => {
             if (data.success) {
                 GameState.currentRoom = null;
@@ -270,7 +385,6 @@ const SocketManager = {
             }
         });
         
-        // Erreur
         socket.on('error', (data) => {
             console.error('❌ Erreur:', data.message);
             UIManager.showNotification(data.message, 'error');
@@ -287,7 +401,7 @@ const SocketManager = {
             DOM.connectionStatus.className = 'connection-status disconnected';
         }
     },
-    
+
     // Envoyer des événements
     registerPlayer(username) {
         GameState.socket.emit('register_player', { username });
@@ -301,8 +415,44 @@ const SocketManager = {
         GameState.socket.emit('join_room', { room_id: roomId });
     },
     
+    // Démarre la partie (uniquement si l'utilisateur est l'hôte)
     startGame() {
-        GameState.socket.emit('start_game');
+        console.log('🔍 [startGame] Début de la fonction startGame');
+        
+        // Vérifie si l'utilisateur est l'hôte de la salle
+        const isHost = this.isRoomHost();
+        console.log(`🔍 [startGame] Est l'hôte de la salle: ${isHost}`);
+        
+        if (!isHost) {
+            const errorMsg = 'Seul l\'hôte peut démarrer la partie';
+            console.error(`❌ [startGame] ${errorMsg}`);
+            UIManager.showNotification(errorMsg, 'error');
+            return false;
+        }
+
+        // Vérifie qu'il y a assez de joueurs (au moins 1 joueur)
+        const playerCount = GameState.currentRoom?.players?.length || 0;
+        console.log(`🔍 [startGame] Nombre de joueurs dans la salle: ${playerCount}`);
+        
+        if (playerCount < 1) {
+            const errorMsg = 'Il faut au moins 1 joueur pour commencer';
+            console.error(`❌ [startGame] ${errorMsg}`);
+            UIManager.showNotification(errorMsg, 'warning');
+            return false;
+        }
+
+        console.log('🚀 [startGame] Envoi de l\'événement start_game au serveur');
+        GameState.socket.emit('start_game', (response) => {
+            // Callback pour la confirmation du serveur
+            if (response && response.error) {
+                console.error(`❌ [startGame] Erreur du serveur: ${response.error}`);
+                UIManager.showNotification(`Erreur: ${response.error}`, 'error');
+            } else {
+                console.log('✅ [startGame] Le serveur a confirmé la réception de start_game');
+            }
+        });
+        
+        return true;
     },
     
     makeGuess(guess) {
@@ -316,18 +466,45 @@ const SocketManager = {
     leaveRoom() {
         GameState.socket.emit('leave_room');
     },
-    
+
     // Récupérer stats via API REST
     async fetchServerStats() {
         try {
-            const response = await fetch(`${CONFIG.SERVER_URL}/api/stats`);
-            const data = await response.json();
+            // Convert WebSocket URL to HTTP URL
+            const httpUrl = CONFIG.SERVER_URL.replace('ws://', 'http://').replace('wss://', 'https://');
+            const statsUrl = `${httpUrl}/api/stats`;
             
-            DOM.onlineCount.textContent = data.total_players || 0;
-            DOM.roomsCount.textContent = data.active_rooms || 0;
-            DOM.gamesCount.textContent = data.total_games_played || 0;
+            console.log('📊 Fetching stats from:', statsUrl);
+            
+            const response = await fetch(statsUrl, {
+                method: 'GET',
+                mode: 'cors',  // Explicitly set CORS mode
+                headers: {
+                    'Content-Type': 'application/json',
+                }
+                // ✅ CORRECTION: Retirer credentials car incompatible avec Access-Control-Allow-Origin: *
+                // credentials: 'include'
+            });
+            
+            console.log('📊 Stats response status:', response.status);
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            
+            const data = await response.json();
+            console.log('📊 Stats data received:', data);
+            
+            if (DOM.onlineCount) DOM.onlineCount.textContent = data.total_players || 0;
+            if (DOM.roomsCount) DOM.roomsCount.textContent = data.active_rooms || 0;
+            if (DOM.gamesCount) DOM.gamesCount.textContent = data.total_games_played || 0;
         } catch (error) {
-            console.error('Erreur stats:', error);
+            console.error('❌ Erreur stats:', error.message);
+            console.error('❌ Stack:', error.stack);
+            // Set default values on error
+            if (DOM.onlineCount) DOM.onlineCount.textContent = '0';
+            if (DOM.roomsCount) DOM.roomsCount.textContent = '0';
+            if (DOM.gamesCount) DOM.gamesCount.textContent = '0';
         }
     }
 };
@@ -336,9 +513,10 @@ const SocketManager = {
 const GameManager = {
     initGame(room) {
         GameState.currentRoom = room;
-        GameState.history = [];
+        // ✅ CORRECTION (doublons): Vider l'historique
+        GameState.history = []; 
         GameState.myStats = { attempts: 0, found: false };
-        
+
         DOM.currentRoomId.textContent = room.room_id;
         DOM.attemptCount.textContent = '0';
         DOM.guessInput.value = '';
@@ -347,7 +525,6 @@ const GameManager = {
         
         this.updatePlayers();
         
-        // Si la partie est déjà commencée
         if (room.status === 'playing') {
             this.startGame();
         } else {
@@ -358,6 +535,10 @@ const GameManager = {
     },
     
     startGame() {
+        // ✅ CORRECTION (auto-start): Cacher le bouton de démarrage
+        const oldBtn = document.getElementById('hostStartBtn');
+        if (oldBtn) oldBtn.remove();
+
         DOM.gameMessage.textContent = '🎮 Devine le nombre entre 0 et 100 !';
         DOM.guessInput.disabled = false;
         DOM.submitGuessBtn.disabled = false;
@@ -393,72 +574,143 @@ const GameManager = {
             
             DOM.playersList.appendChild(playerDiv);
         });
+
+        // ✅ CORRECTION (auto-start): Logique d'affichage du bouton pour l'hôte
+        const room = GameState.currentRoom;
+        const isHost = room.players.length > 0 && room.players[0].socket_id === GameState.socketId;
+        
+        console.log('🔍 [updatePlayers] Vérification hôte:', {
+            socketId: GameState.socketId,
+            firstPlayer: room.players[0]?.socket_id,
+            isHost: isHost,
+            roomStatus: room.status
+        });
+
+        // Nettoyer l'ancien bouton
+        const oldBtn = document.getElementById('hostStartBtn');
+        if (oldBtn) oldBtn.remove();
+
+        // Si je suis l'hôte, que la partie n'a pas démarré
+        if (isHost && room.status === 'waiting') {
+            const startBtn = document.createElement('button');
+            startBtn.id = 'hostStartBtn';
+            startBtn.className = 'btn';
+            // ✅ CORRECTION: Permettre de jouer seul (1 joueur minimum)
+            const minPlayers = 1; 
+            startBtn.disabled = room.players.length < minPlayers;
+            
+            startBtn.textContent = `🚀 DÉMARRER (${room.players.length}/${room.max_players})`;
+            startBtn.style.marginTop = '20px';
+            startBtn.onclick = () => {
+                SocketManager.startGame();
+                SoundFX.click();
+                startBtn.disabled = true;
+            };
+            
+            DOM.playersList.after(startBtn);
+            
+            if (room.players.length < minPlayers) {
+                DOM.gameMessage.textContent = `En attente d'au moins ${minPlayers} joueurs...`;
+            } else {
+                DOM.gameMessage.textContent = 'Vous êtes l\'hôte. Démarrez la partie !';
+            }
+        }
     },
     
     handleGuessResult(data) {
-        const { result, message, attempts, player_data } = data;
+        const { result, message, attempts, player_data, guess } = data;
         
-        // Mettre à jour les stats
         GameState.myStats.attempts = attempts;
         DOM.attemptCount.textContent = attempts;
         DOM.gameMessage.textContent = message;
         
         // Ajouter à l'historique
         this.addToHistory({
-            guess: data.result === 'bravo' ? player_data.history[player_data.history.length - 1].guess : null,
+            // ✅ CORRECTION (sync history): Toujours passer la proposition
+            guess: guess, 
             result,
             message,
             attempt: attempts
-        });
+        }, GameState.username); // Préciser que c'est "moi"
         
-        // Son et feedback
         if (result === 'bravo') {
             GameState.myStats.found = true;
             DOM.guessInput.disabled = true;
             DOM.submitGuessBtn.disabled = true;
-            this.showVictory(player_data);
+            
+            // ✅ CORRECTION (double affichage): Ne pas appeler showVictory.
+            // L'événement 'game_finished' s'en chargera.
+            // this.showVictory(player_data);
+            
+            DOM.gameMessage.textContent = '🎉 BRAVO ! En attente de la fin de la partie...';
             SoundFX.success();
         } else {
             SoundFX.hint();
         }
         
-        // Vider l'input
         DOM.guessInput.value = '';
         DOM.guessInput.focus();
     },
     
-    addToHistory(item) {
+    // ✅ CORRECTION (sync history): Nouvelle fonction
+    handleOtherPlayerAction(action) {
+        const { player, guess, result } = action;
+        // On utilise la même fonction addToHistory pour un affichage unifié
+        this.addToHistory({
+            guess: guess,
+            result: result,
+            message: '', // Pas pertinent pour les autres
+            attempt: null // On ne l'a pas
+        }, player); // On passe le nom du joueur
+    },
+
+    // ✅ CORRECTION (sync history): 'playerName' ajouté
+    addToHistory(item, playerName = 'You') {
+        // ✅ CORRECTION (doublons): Sauvegarder MES tentatives dans l'état
+        const isMe = playerName === GameState.username;
+        if (isMe && item.guess !== null) {
+            GameState.history.push(item.guess);
+        }
+
         if (DOM.historyList.children[0]?.textContent === 'No attempts yet') {
             DOM.historyList.innerHTML = '';
         }
         
+        // ✅ CORRECTION (sync history): Style différent pour 'me' vs 'other'
         const historyDiv = document.createElement('div');
-        historyDiv.className = `history-item ${item.result}`;
+        historyDiv.className = `history-item ${item.result} ${isMe ? 'me' : 'other'}`;
         
-        const guess = item.guess || 'X';
+        const guess = item.guess ?? 'X';
         const resultText = item.result === 'grand' ? '📉 TOO HIGH' : 
                           item.result === 'petit' ? '📈 TOO LOW' : 
                           '🎉 CORRECT!';
         
-        historyDiv.innerHTML = `
-            <div class="history-guess">${guess}</div>
-            <div class="history-info">
-                <div class="history-result">${resultText}</div>
-                <div class="history-attempt">Attempt #${item.attempt}</div>
-            </div>
-        `;
+        if (isMe) {
+            historyDiv.innerHTML = `
+                <div class="history-guess">${guess}</div>
+                <div class="history-info">
+                    <div class="history-result">${resultText}</div>
+                    <div class="history-attempt">Attempt #${item.attempt}</div>
+                </div>
+            `;
+        } else {
+             historyDiv.innerHTML = `
+                <div class="history-guess">${guess}</div>
+                <div class="history-info">
+                    <div class="history-result">${playerName} -> ${resultText}</div>
+                </div>
+            `;
+        }
         
         DOM.historyList.insertBefore(historyDiv, DOM.historyList.firstChild);
     },
     
     showVictory(playerData) {
-        const targetNumber = GameState.currentRoom.target_number;
-        
+        // (Cette fonction n'est plus appelée, mais on la garde au cas où)
         DOM.victoryMessage.innerHTML = `
             <div class="victory-message">
                 <div class="victory-title">🎉 VICTOIRE ! 🎉</div>
                 <div>Tu as trouvé le nombre en ${playerData.attempts} tentative(s)</div>
-                <div class="victory-number">${targetNumber}</div>
                 <div style="font-size: 10px; color: #888;">Score: ${playerData.score || 0} points</div>
             </div>
         `;
@@ -472,6 +724,9 @@ const GameManager = {
         
         // Afficher le classement final
         UIManager.showLeaderboard(data.leaderboard, data.target_number);
+
+        // ✅ CORRECTION: Mettre à jour les stats globales (total_games)
+        SocketManager.fetchServerStats();
     }
 };
 
@@ -479,25 +734,25 @@ const GameManager = {
 const LobbyManager = {
     displayRooms(rooms) {
         if (rooms.length === 0) {
-            DOM.roomsList.innerHTML = `
-                <div style="grid-column: 1/-1; text-align: center; padding: 60px; color: #555;">
-                    <div style="font-size: 48px; margin-bottom: 20px;">🎮</div>
-                    <div style="font-size: 14px; margin-bottom: 10px;">Aucune salle disponible</div>
-                    <div style="font-size: 10px;">Crée ta propre salle pour commencer !</div>
-                </div>
-            `;
+            DOM.roomsList.innerHTML = `<div style="grid-column: 1/-1; text-align: center; padding: 60px; color: #555;"> <div style="font-size: 48px; margin-bottom: 20px;">🎮</div> <div style="font-size: 14px; margin-bottom: 10px;">Aucune salle disponible</div> <div style="font-size: 10px;">Crée ta propre salle pour commencer !</div> </div>`;
             return;
         }
-        
+
         DOM.roomsList.innerHTML = '';
         
         rooms.forEach(room => {
             const roomCard = document.createElement('div');
             roomCard.className = 'room-card';
-            roomCard.onclick = () => {
-                SocketManager.joinRoom(room.room_id);
-                SoundFX.click();
-            };
+            
+            // On ne peut pas rejoindre une partie en cours
+            if (room.status === 'playing' || room.player_count >= room.max_players) {
+                roomCard.classList.add('disabled');
+            } else {
+                roomCard.onclick = () => {
+                    SocketManager.joinRoom(room.room_id);
+                    SoundFX.click();
+                };
+            }
             
             const modeText = room.mode === 'versus' ? '⚔️ VERSUS' :
                            room.mode === 'battle_royale' ? '🏆 BATTLE ROYALE' :
@@ -525,22 +780,9 @@ const LobbyManager = {
 const UIManager = {
     showNotification(message, type = 'info') {
         const notif = document.createElement('div');
-        notif.style.cssText = `
-            position: fixed;
-            top: 80px;
-            right: 20px;
-            padding: 15px 20px;
-            background: ${type === 'success' ? '#5EBD3E' : type === 'error' ? '#E74C3C' : '#47A8BD'};
-            border: 3px solid ${type === 'success' ? '#3a8a2a' : type === 'error' ? '#c0392b' : '#2e7a8a'};
-            color: white;
-            font-size: 10px;
-            z-index: 9999;
-            animation: slideInRight 0.3s ease-out;
-            max-width: 300px;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.5);
-        `;
+        notif.style.cssText = `position: fixed; top: 80px; right: 20px; padding: 15px 20px; background: ${type === 'success' ? '#5EBD3E' : type === 'error' ? '#E74C3C' : (type === 'warning' ? '#F39C12' : '#47A8BD')}; border: 3px solid ${type === 'success' ? '#3a8a2a' : type === 'error' ? '#c0392b' : (type === 'warning' ? '#b8790f' : '#2e7a8a')}; color: white; font-size: 10px; z-index: 9999; animation: slideInRight 0.3s ease-out; max-width: 300px; box-shadow: 0 4px 8px rgba(0,0,0,0.5);`;
         notif.textContent = message;
-        
+
         document.body.appendChild(notif);
         
         setTimeout(() => {
@@ -562,6 +804,7 @@ const UIManager = {
             align-items: center;
             justify-content: center;
             z-index: 10000;
+            animation: fadeIn 0.3s;
         `;
         
         const content = document.createElement('div');
@@ -608,40 +851,39 @@ const UIManager = {
 function setupEventListeners() {
     // Menu
     DOM.usernameInput.addEventListener('input', () => {
-      console.log("Input entré")
         const hasUsername = DOM.usernameInput.value.trim().length > 0;
         DOM.quickMatchBtn.disabled = !hasUsername;
         DOM.joinLobbyBtn.disabled = !hasUsername;
     });
-    
+
     DOM.usernameInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter' && e.target.value.trim()) {
-            handleQuickMatch();
+            handleJoinLobby(); // Par défaut, on va au lobby
         }
     });
-    
+
     DOM.quickMatchBtn.addEventListener('click', handleQuickMatch);
     DOM.joinLobbyBtn.addEventListener('click', handleJoinLobby);
-    
+
     // Lobby
     DOM.createRoomBtn.addEventListener('click', () => {
         SocketManager.createRoom('versus', 4);
         SoundFX.click();
     });
-    
+
     DOM.backToMenuBtn.addEventListener('click', () => {
         ScreenManager.show('menu');
     });
-    
+
     // Jeu
     DOM.guessInput.addEventListener('keypress', (e) => {
         if (e.key === 'Enter' && !DOM.submitGuessBtn.disabled) {
             handleSubmitGuess();
         }
     });
-    
+
     DOM.submitGuessBtn.addEventListener('click', handleSubmitGuess);
-    
+
     DOM.leaveGameBtn.addEventListener('click', () => {
         if (confirm('Quitter la partie ?')) {
             SocketManager.leaveRoom();
@@ -654,22 +896,24 @@ function setupEventListeners() {
 function handleQuickMatch() {
     const username = DOM.usernameInput.value.trim();
     if (!username) return;
-    
+
     GameState.username = username;
     SocketManager.registerPlayer(username);
     
     // Créer une salle automatiquement
+    // (le 'setTimeout' donne le temps au socket de s'enregistrer)
     setTimeout(() => {
+        // Crée une salle et attend que le serveur la confirme
         SocketManager.createRoom('versus', 4);
     }, 500);
-    
+
     SoundFX.click();
 }
 
 function handleJoinLobby() {
     const username = DOM.usernameInput.value.trim();
     if (!username) return;
-    
+
     GameState.username = username;
     SocketManager.registerPlayer(username);
     ScreenManager.show('lobby');
@@ -677,7 +921,7 @@ function handleJoinLobby() {
 
 function handleSubmitGuess() {
     const guess = DOM.guessInput.value.trim();
-    
+
     if (!guess) {
         UIManager.showNotification('Entre un nombre !', 'warning');
         SoundFX.error();
@@ -690,7 +934,14 @@ function handleSubmitGuess() {
         SoundFX.error();
         return;
     }
-    
+
+    // ✅ CORRECTION (doublons): Vérifier l'historique
+    if (GameState.history.includes(num)) {
+        UIManager.showNotification('Tu as déjà proposé ce nombre !', 'warning');
+        SoundFX.error();
+        return;
+    }
+
     SocketManager.makeGuess(num);
     SoundFX.click();
 }
@@ -698,7 +949,7 @@ function handleSubmitGuess() {
 // ========== INITIALISATION ==========
 function init() {
     console.log('🎮 GuessCraft - Initialisation...');
-    
+
     // Connexion au serveur
     SocketManager.connect();
     
@@ -722,16 +973,52 @@ if (document.readyState === 'loading') {
     init();
 }
 
-// Ajouter les animations CSS manquantes
+// Ajouter les animations CSS (notifications + transitions d'écran)
 const style = document.createElement('style');
 style.textContent = `
-    @keyframes slideInRight {
-        from { transform: translateX(400px); opacity: 0; }
-        to { transform: translateX(0); opacity: 1; }
+    @keyframes slideInRight { 
+        from { transform: translateX(400px); opacity: 0; } 
+        to { transform: translateX(0); opacity: 1; } 
+    } 
+    @keyframes slideOutRight { 
+        from { transform: translateX(0); opacity: 1; } 
+        to { transform: translateX(400px); opacity: 0; } 
     }
-    @keyframes slideOutRight {
-        from { transform: translateX(0); opacity: 1; }
-        to { transform: translateX(400px); opacity: 0; }
+    
+    /* ✅ CORRECTION (animations): Transitions d'écran */
+    .screen {
+        display: none;
+        opacity: 0;
+        transition: opacity 0.4s ease-out;
+    }
+    .screen.active {
+        display: block;
+        opacity: 1;
+        animation: fadeIn 0.4s ease-out;
+    }
+    @keyframes fadeIn { 
+        from { opacity: 0; transform: translateY(10px); } 
+        to { opacity: 1; transform: translateY(0); } 
+    }
+    
+    /* ✅ CORRECTION (sync history): Style pour les autres joueurs */
+    .history-item.other {
+        background: var(--bg-dark); /* Plus sombre */
+        border-color: #333;
+    }
+    .history-item.other .history-guess {
+        background: #444; /* Guess plus sombre */
+        color: #bbb;
+    }
+    .history-item.other .history-info {
+        font-size: 9px;
+    }
+
+    /* Style pour les salons désactivés */
+    .room-card.disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+        background: var(--bg-darker);
     }
 `;
 document.head.appendChild(style);

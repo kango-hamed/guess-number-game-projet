@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 import socketio
 from typing import Dict, List, Optional
@@ -77,12 +77,43 @@ class GameRoom:
             del self.players[socket_id]
     
     def start_game(self) -> bool:
+        print(f"[DEBUG] Démarrage de la partie dans la salle {self.room_id}")
+        print(f"[DEBUG] Nombre de joueurs: {len(self.players)}")
+        print(f"[DEBUG] Statut actuel: {self.status}")
+        
+        # Vérifier le nombre minimum de joueurs (au moins 1 pour le mode solo)
         if len(self.players) < 1:
+            print("[ERREUR] Pas assez de joueurs pour démarrer (minimum 1)")
             return False
+            
+        # Vérifier si la partie n'est pas déjà en cours
+        if self.status == "playing":
+            print("[ERREUR] La partie est déjà en cours")
+            return False
+            
+        # Initialiser l'état de la partie
         self.status = "playing"
         self.started_at = datetime.now()
-        self.target_number = random.randint(0, 100)
-        self.guesses_history = []
+        self.winner = None
+        self.target_number = random.randint(0, 100)  # Nouveau nombre aléatoire
+        self.guesses_history = []  # Réinitialiser l'historique des tentatives
+        
+        # Réinitialiser l'état des joueurs
+        for player_id, player in self.players.items():
+            player.update({
+                'attempts': 0,
+                'history': [],
+                'status': 'playing',
+                'found': False,
+                'position': None,
+                'score': 0
+            })
+        
+        print(f"[SUCCÈS] Partie démarrée avec succès dans la salle {self.room_id}")
+        print(f"[DEBUG] Nouveau statut: {self.status}, Nombre cible: {self.target_number}")
+        return True
+        
+        print(f"[SUCCÈS] Partie démarrée avec le nombre cible: {self.target_number}")
         return True
     
     def process_guess(self, socket_id: str, guess: int) -> dict:
@@ -205,25 +236,76 @@ manager = GameManager()
 
 # ========== SOCKET.IO ==========
 
+# Configuration améliorée de Socket.IO
 sio = socketio.AsyncServer(
     async_mode='asgi',
     cors_allowed_origins='*',
     logger=True,
-    engineio_logger=False
+    engineio_logger=True,  # Activer les logs Engine.IO pour le débogage
+    ping_timeout=60,       # 60 secondes avant déconnexion si pas de ping
+    ping_interval=25,      # Envoyer un ping toutes les 25 secondes
+    max_http_buffer_size=1e8,  # Taille maximale du buffer
+    async_handlers=True,   # Gestionnaires asynchrones
+    always_connect=False,  # Ne pas accepter les connexions avant que le serveur ne soit prêt
+    allow_upgrades=True,   # Autoriser les mises à niveau de protocole
+    http_compression=True, # Activer la compression HTTP
+    compression_threshold=1024,  # Seuil de compression
+    cookie=None,           # Pas de cookie de session
+    allow_headers='*',     # Autoriser tous les en-têtes
+    cors_credentials=True, # Autoriser les credentials CORS
+    namespaces=['/']       # Utiliser l'espace de noms racine
 )
 
 # ========== APPLICATION FASTAPI ==========
 
 app = FastAPI(title="GuessCraft API", version="1.0.1")
 
-# CORS
+# Configuration CORS améliorée (développement)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",  # URL de développement Vite
+        "http://127.0.0.1:5173",  # Alternative localhost
+        "http://localhost:8000",  # URL du serveur
+        "http://127.0.0.1:8000",  # Alternative serveur
+        "http://localhost:3000",  # Port React par défaut
+        "http://127.0.0.1:3000"   # Alternative React
+    ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # Autoriser toutes les méthodes pour le développement
+    allow_headers=["*"],  # Autoriser tous les headers pour le développement
+    expose_headers=["*"],  # Exposer tous les headers
+    max_age=600  # Durée de mise en cache des pré-vérifications CORS (en secondes)
 )
+
+# Middleware unifié pour gérer CORS sur toutes les requêtes
+@app.middleware("http")
+async def add_cors_headers(request, call_next):
+    # Log all incoming requests for debugging
+    print(f"[HTTP] {request.method} {request.url.path}")
+    
+    # Handle OPTIONS preflight requests
+    if request.method == "OPTIONS":
+        response = Response()
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        # ✅ CORRECTION: Ne pas mettre credentials avec origin *
+        # response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        response.headers["Access-Control-Max-Age"] = "600"
+        return response
+    
+    # Process the request
+    response = await call_next(request)
+    
+    # Add CORS headers to all responses
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    # ✅ CORRECTION: Ne pas mettre credentials avec origin *
+    # response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    
+    return response
 
 # Monter Socket.IO sur FastAPI
 socket_app = socketio.ASGIApp(sio, app)
@@ -249,11 +331,14 @@ async def health_check():
 
 @app.get("/api/stats")
 async def get_stats():
-    return {
+    print("[API] GET /api/stats - Requête reçue")
+    stats = {
         "total_players": len(manager.players),
         "active_rooms": len(manager.game_rooms),
         "total_games_played": sum(p.total_games for p in manager.players.values())
     }
+    print(f"[API] Stats envoyées: {stats}")
+    return stats
 
 @app.get("/api/rooms")
 async def get_rooms():
@@ -405,30 +490,54 @@ async def join_room(sid, data):
 
 @sio.event
 async def start_game(sid):
+    print(f"[DEBUG] start_game appelé par le joueur {sid}")
+    
+    # Vérifier si le joueur existe
     if sid not in manager.players:
-        return
+        error_msg = f"[ERREUR] Le joueur {sid} n'existe pas"
+        print(error_msg)
+        await sio.emit('error', {'message': 'Erreur: Joueur non trouvé'}, to=sid)
+        return {'error': 'Joueur non trouvé'}
     
     player = manager.players[sid]
+    print(f"[DEBUG] Joueur trouvé: {player.username} (salle: {player.room_id})")
+    
+    # Vérifier si le joueur est dans une salle
     if not player.room_id or player.room_id not in manager.game_rooms:
+        error_msg = f"[ERREUR] Le joueur {player.username} n'est pas dans une salle valide"
+        print(error_msg)
         await sio.emit('error', {
             'message': 'Tu n\'es pas dans une salle'
         }, to=sid)
-        return
+        return {'error': 'Pas dans une salle'}
     
     room = manager.game_rooms[player.room_id]
+    print(f"[DEBUG] Salle trouvée: {room.room_id} (statut actuel: {room.status})")
+    print(f"[DEBUG] Joueurs dans la salle: {len(room.players)}")
     
+    # Tenter de démarrer la partie
     if not room.start_game():
+        error_msg = f"[ERREUR] Impossible de démarrer la partie dans la salle {room.room_id}"
+        print(error_msg)
         await sio.emit('error', {
-            'message': 'Impossible de démarrer'
+            'message': 'Impossible de démarrer la partie. Vérifiez le nombre de joueurs.'
         }, to=sid)
-        return
+        return {'error': 'Échec du démarrage'}
     
-    print(f"[START] Partie demarree dans la salle {room.room_id}")
+    print(f"[SUCCÈS] Partie démarrée dans la salle {room.room_id} avec {len(room.players)} joueurs")
     
+    # Préparer les données de la salle à envoyer aux clients
+    room_state = room.get_state()
+    print(f"[DEBUG] État de la salle après démarrage: {room_state}")
+    
+    # Envoyer la confirmation de démarrage à tous les joueurs de la salle
     await sio.emit('game_started', {
         'message': '🎮 La partie commence !',
-        'room_state': room.get_state()
+        'room_state': room_state
     }, room=player.room_id)
+    
+    print(f"[INFO] Notification de démarrage envoyée à tous les joueurs de la salle {room.room_id}")
+    return {'success': True}
 
 @sio.event
 async def make_guess(sid, data):
