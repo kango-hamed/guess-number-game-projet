@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Connexion WebSocket</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #0f0;
+        }
+        .log {
+            background: #000;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #0f0;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .success { color: #0f0; }
+        .error { color: #f00; }
+        .info { color: #0ff; }
+    </style>
+</head>
+<body>
+    <h1>🧪 Test de Connexion WebSocket</h1>
+    <div id="status">Status: <span id="statusText">Initialisation...</span></div>
+    <div class="log" id="log"></div>
+
+    <script>
+        const log = document.getElementById('log');
+        const statusText = document.getElementById('statusText');
+
+        function addLog(message, type = 'info') {
+            const time = new Date().toLocaleTimeString();
+            const line = document.createElement('div');
+            line.className = type;
+            line.textContent = `[${time}] ${message}`;
+            log.appendChild(line);
+            log.scrollTop = log.scrollHeight;
+            console.log(message);
+        }
+
+        function updateStatus(text, type = 'info') {
+            statusText.textContent = text;
+            statusText.className = type;
+        }
+
+        // Test de connexion
+        const SERVER_URL = 'ws://localhost:8000';
+        addLog(`🔌 Tentative de connexion à: ${SERVER_URL}`);
+        updateStatus('Connexion en cours...', 'info');
+
+        const socket = io(SERVER_URL, {
+            transports: ['websocket', 'polling'],
+            reconnection: true,
+            reconnectionAttempts: 3,
+            reconnectionDelay: 1000,
+            timeout: 10000
+        });
+
+        socket.on('connect', () => {
+            addLog('✅ CONNECTÉ AU SERVEUR !', 'success');
+            addLog(`Socket ID: ${socket.id}`, 'success');
+            updateStatus('Connecté ✅', 'success');
+        });
+
+        socket.on('disconnect', (reason) => {
+            addLog(`❌ Déconnecté: ${reason}`, 'error');
+            updateStatus('Déconnecté ❌', 'error');
+        });
+
+        socket.on('connect_error', (error) => {
+            addLog(`❌ Erreur de connexion: ${error.message}`, 'error');
+            updateStatus('Erreur de connexion ❌', 'error');
+        });
+
+        socket.on('error', (error) => {
+            addLog(`❌ Erreur: ${error}`, 'error');
+        });
+
+        // Écouter tous les événements
+        socket.onAny((eventName, ...args) => {
+            addLog(`📨 Événement reçu: ${eventName}`, 'info');
+            if (args.length > 0) {
+                addLog(`   Données: ${JSON.stringify(args)}`, 'info');
+            }
+        });
+
+        addLog('🚀 Script initialisé');
+    </script>
+</body>
+</html>
