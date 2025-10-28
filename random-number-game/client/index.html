@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GuessCraft - Multiplayer Edition</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="./src/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="connectionStatus" class="connection-status disconnected">
+        ⚡ CONNECTING...
+    </div>
+
+    <div class="container">
+        <!-- ÉCRAN MENU -->
+        <div id="menuScreen" class="screen active">
+            <div class="panel">
+                <div class="corner-tl"></div>
+                <div class="corner-tr"></div>
+                <div class="corner-bl"></div>
+                <div class="corner-br"></div>
+
+                <div class="logo">
+                    <h1>GUESS CRAFT</h1>
+                    <p class="subtitle">MULTIPLAYER EDITION</p>
+                </div>
+
+                <div class="menu-content">
+                    <div>
+                        <label style="display: block; margin-bottom: 10px; font-size: 10px; color: #888;">
+                            ENTER USERNAME
+                        </label>
+                        <input type="text" id="usernameInput" placeholder="Steve" maxlength="12">
+                    </div>
+
+                    <button class="btn" id="quickMatchBtn" disabled>
+                        ⚔️ QUICK MATCH
+                    </button>
+
+                    <button class="btn btn-blue" id="joinLobbyBtn" disabled>
+                        👥 JOIN LOBBY
+                    </button>
+
+                    <button class="btn btn-purple" id="leaderboardBtn">
+                        🏆 LEADERBOARD
+                    </button>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-value" style="color: var(--gold);" id="onlineCount">-</div>
+                        <div class="stat-label">ONLINE</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" style="color: var(--grass-green);" id="roomsCount">-</div>
+                        <div class="stat-label">ROOMS</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" style="color: var(--diamond-blue);" id="gamesCount">-</div>
+                        <div class="stat-label">GAMES</div>
+                    </div>
+                </div>
+            </div>
+
+            <div style="text-align: center; margin-top: 20px; font-size: 8px; color: #555;">
+                <p>VERSION 1.0 • TP PRAD 2025-2026</p>
+            </div>
+        </div>
+
+        <!-- ÉCRAN LOBBY -->
+        <div id="lobbyScreen" class="screen">
+            <div class="panel">
+                <div class="corner-tl"></div>
+                <div class="corner-tr"></div>
+                <div class="corner-bl"></div>
+                <div class="corner-br"></div>
+
+                <div class="lobby-header">
+                    <div>
+                        <h2 style="font-size: 24px; color: var(--gold); margin-bottom: 10px;">GAME LOBBY</h2>
+                        <p style="font-size: 10px; color: #888;">Choose a room or create one</p>
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <button class="btn" id="createRoomBtn">+ CREATE ROOM</button>
+                        <button class="btn btn-red" id="backToMenuBtn">← BACK</button>
+                    </div>
+                </div>
+
+                <div id="roomsList" class="room-list">
+                    <div class="loading">LOADING ROOMS</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ÉCRAN DE JEU -->
+        <div id="gameScreen" class="screen">
+            <div class="game-layout">
+                <!-- Zone principale -->
+                <div class="game-main panel">
+                    <div class="corner-tl"></div>
+                    <div class="corner-tr"></div>
+                    <div class="corner-bl"></div>
+                    <div class="corner-br"></div>
+
+                    <div class="game-header">
+                        <div>
+                            <div class="room-info">ROOM: <span id="currentRoomId">-----</span></div>
+                            <div class="game-message" id="gameMessage">Devine le nombre !</div>
+                        </div>
+                        <div class="attempt-counter">
+                            <div class="attempt-value" id="attemptCount">0</div>
+                            <div class="attempt-label">ATTEMPTS</div>
+                        </div>
+                    </div>
+
+                    <div id="victoryMessage" style="display: none;"></div>
+
+                    <div class="guess-input-area">
+                        <label style="display: block; margin-bottom: 10px; font-size: 10px; color: #888;">
+                            ENTER YOUR GUESS (0-100)
+                        </label>
+                        <div class="guess-controls">
+                            <input type="number" id="guessInput" placeholder="50" min="0" max="100">
+                            <button class="btn" id="submitGuessBtn">SEND</button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <h3 style="font-size: 14px; margin-bottom: 15px; color: var(--gold);">
+                            📜 HISTORY
+                        </h3>
+                        <div id="historyList" class="history-list">
+                            <div style="text-align: center; padding: 40px; color: #555; font-size: 10px;">
+                                No attempts yet
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Panneau joueurs -->
+                <div class="players-panel panel">
+                    <div class="corner-tl"></div>
+                    <div class="corner-tr"></div>
+                    <div class="corner-bl"></div>
+                    <div class="corner-br"></div>
+
+                    <div class="players-title">👥 PLAYERS</div>
+                    <div id="playersList" class="player-list"></div>
+
+                    <button class="btn btn-red" id="leaveGameBtn" style="margin-top: 20px;">
+                        LEAVE GAME
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="./src/main.js"></script>
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+</body>
+</html>
