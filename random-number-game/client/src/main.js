@@ -1,8 +1,23 @@
 // ========== CONFIGURATION ==========
 const CONFIG = {
-    // URL du serveur WebSocket (utiliser ws:// pour HTTP ou wss:// pour HTTPS)
-    SERVER_URL: 'ws://localhost:8000',
-    // Nombre de tentatives de reconnexion
+    // ✅ Le serveur est TOUJOURS sur le port 8000, PAS sur 5173
+    SERVER_URL: (() => {
+        // Priorité 1 : Variable d'environnement
+        if (import.meta.env.VITE_SERVER_URL) {
+            console.log('📡 [CONFIG] Utilisation de .env:', import.meta.env.VITE_SERVER_URL);
+            return import.meta.env.VITE_SERVER_URL;
+        }
+        
+        // Priorité 2 : Construction automatique (port 8000 !)
+        const hostname = window.location.hostname;
+        const serverUrl = `ws://${hostname}:8000`;
+        
+        console.log('📡 [CONFIG] URL auto-construite:', serverUrl);
+        console.warn('⚠️ [CONFIG] Pas de .env trouvé, utilisation de:', serverUrl);
+        
+        return serverUrl;
+    })(),
+    
     RECONNECT_ATTEMPTS: 5,
     RECONNECT_DELAY: 2000
 };
